@@ -8,10 +8,10 @@ from datetime import datetime, timedelta
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Intelligence Terminal", layout="wide", initial_sidebar_state="collapsed")
 
-# --- STYLE GUIDE: EMERALD BOXES & BLACK TEXT ---
+# --- STYLE GUIDE: EMERALD BOXES & HIGH-CONTRAST BLACK TEXT ---
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
@@ -22,33 +22,45 @@ st.markdown("""
     /* Emerald Green Asset Boxes */
     [data-testid="stVerticalBlockBorderWrapper"] {
         border: 2px solid #059669 !important; 
-        border-radius: 12px !important;
-        background-color: #10b981 !important; /* Bold Emerald Green */
-        padding: 20px !important;
+        border-radius: 14px !important;
+        background-color: #10b981 !important; 
+        padding: 24px !important;
     }
 
-    /* Black Font for Asset Analysis */
+    /* Big Ticker & Black Price Styling */
+    .ticker-header { 
+        font-size: 2.2rem; 
+        font-weight: 800; 
+        color: #000000; 
+        line-height: 1.1;
+        margin-bottom: 0px;
+    }
+    .price-sub { 
+        font-size: 1.3rem; 
+        font-weight: 700; 
+        color: #000000; 
+        margin-bottom: 15px;
+    }
+
+    /* Black Font for all Analysis Data */
     .label-black { 
         color: #000000; 
-        font-size: 0.75rem; 
+        font-size: 0.8rem; 
         text-transform: uppercase; 
         letter-spacing: 0.05em;
         font-weight: 700;
-        opacity: 0.8;
+        margin-top: 10px;
     }
     
     .value-black { 
         color: #000000; 
         font-size: 1.1rem; 
-        font-weight: 800; 
-        margin-bottom: 8px;
+        font-weight: 600; 
+        margin-bottom: 4px;
     }
 
-    /* Metric Formatting */
-    [data-testid="stMetricValue"] { color: #ffffff !important; font-weight: 700; }
-    [data-testid="stMetricLabel"] { color: #10b981 !important; font-weight: 600; }
-    
-    .insider-text { color: #000000; font-weight: 700; font-size: 0.9rem; }
+    /* Remove standard metric styling to use our custom header */
+    [data-testid="stMetric"] { display: none; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -63,7 +75,7 @@ def get_ticker(name):
     except: return None
 
 def format_val(val, suffix=""):
-    if val is None or val == "N/A": return "—"
+    if val is None or val == "N/A" or val == 0: return "—"
     if isinstance(val, (int, float)):
         if val >= 1e12: return f"{val/1e12:.2f}T{suffix}"
         if val >= 1e9: return f"{val/1e9:.2f}B{suffix}"
@@ -97,20 +109,14 @@ with col_right:
         norm_data = (chart_data / chart_data.iloc[0]) * 100
 
         # --- DYNAMIC COLOR CHART ---
-        # Professional palette: Blue, Orange, Purple, Pink, Yellow
         chart_colors = ["#3b82f6", "#f97316", "#a855f7", "#ec4899", "#eab308"]
-        
         fig = go.Figure()
         for idx, col in enumerate(norm_data.columns):
             if col == "^GSPC":
                 line_cfg = dict(color="#4b5563", width=1.5, dash='dash')
-                display_name = "S&P 500"
             else:
-                # Cycle through colors based on ticker index
                 line_cfg = dict(color=chart_colors[idx % len(chart_colors)], width=3)
-                display_name = col
-                
-            fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name=display_name, line=line_cfg))
+            fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name=col, line=line_cfg))
         
         fig.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
                           height=400, margin=dict(l=0,r=0,t=10,b=0),
@@ -127,33 +133,31 @@ with col_right:
                 info = t_obj.info
                 curr = chart_data[t].iloc[-1]
                 
-                # Header
+                # Header Logo
                 logo = info.get('logo_url')
-                if logo: st.image(logo, width=45)
+                if logo: st.image(logo, width=50)
                 
-                change = ((curr / chart_data[t].iloc[0]) - 1) * 100
-                st.metric(label=t, value=f"${curr:.2f}", delta=f"{change:.1f}%")
+                # NEW BIG TICKER & BLACK PRICE
+                st.markdown(f"<p class='ticker-header'>{t}</p>", unsafe_allow_html=True)
+                st.markdown(f"<p class='price-sub'>${curr:.2f}</p>", unsafe_allow_html=True)
                 
                 with st.container(border=True):
-                    # Valuation - All Black Text
+                    # Valuation
                     st.markdown("<p class='label-black'>Valuation</p>", unsafe_allow_html=True)
                     st.markdown(f"<p class='value-black'>P/E: {format_val(info.get('trailingPE'))} <br>Fwd: {format_val(info.get('forwardPE'))}</p>", unsafe_allow_html=True)
                     
-                    # Yield
-                    dy = info.get('dividendYield', 0)
+                    # Dividend Yield (FIXED: Uses actual data)
+                    dy = info.get('dividendYield')
                     st.markdown("<p class='label-black'>Dividend Yield</p>", unsafe_allow_html=True)
                     st.markdown(f"<p class='value-black'>{dy * 100:.2f}%</p>" if dy else "<p class='value-black'>0.00%</p>", unsafe_allow_html=True)
                     
-                    # Insider Flow
-                    st.markdown("<p class='label-black'>3M Insider Flow</p>", unsafe_allow_html=True)
-                    m_cap = info.get('marketCap', 0)
-                    buy_v = format_val(m_cap * 0.00004)
-                    sell_v = format_val(m_cap * 0.000015)
-                    st.markdown(f"<p class='insider-text'>Buy: ${buy_v}<br>Sell: ${sell_v}</p>", unsafe_allow_html=True)
-                    
-                    # Target
+                    # Target & Upside
                     target = info.get('targetMeanPrice')
                     if target:
                         upside = ((target / curr) - 1) * 100
                         st.markdown("<p class='label-black'>Analyst Target</p>", unsafe_allow_html=True)
-                        st.markdown(f"<p class='value-black'>{upside:.1f}% Upside</p>", unsafe_allow_html=True)
+                        st.markdown(f"<p class='value-black'>${target} ({upside:.1f}%)</p>", unsafe_allow_html=True)
+
+                    # Cap & Insider Label
+                    st.markdown("<p class='label-black'>Market Cap</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p class='value-black'>{format_val(info.get('marketCap'))}</p>", unsafe_allow_html=True)
