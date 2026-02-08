@@ -12,9 +12,9 @@ st.set_page_config(page_title="Terminal Pro", layout="wide", initial_sidebar_sta
 st.markdown("""
     <style>
     .main { background-color: #000000; color: #ffffff; }
-    .stTextInput > div > div > input { background-color: #111; color: #00ff88; border: 1px solid #333; }
+    .stTextInput > div > div > input { background-color: #111 !important; color: #00ff88 !important; border: 1px solid #333 !important; }
     .side-card { background: #111; padding: 12px; border-radius: 10px; border: 1px solid #222; margin-bottom: 15px; }
-    .stat-box { background: #161616; padding: 12px; border-radius: 8px; border: 1px solid #282828; margin-top: 5px; min-height: 130px; }
+    .stat-box { background: #161616; padding: 12px; border-radius: 8px; border: 1px solid #282828; margin-top: 5px; min-height: 160px; }
     .stat-label { font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
     .stat-value { font-size: 0.95rem; color: #fff; font-weight: bold; margin-bottom: 2px; }
     .badge { padding: 3px 10px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; display: inline-block; }
@@ -23,7 +23,9 @@ st.markdown("""
     .sell-bg { background-color: #e74c3c; color: #fff; }
     .insider-bar { height: 6px; background: #333; border-radius: 3px; margin: 6px 0; overflow: hidden; }
     .insider-fill { height: 100%; background: linear-gradient(90deg, #00ff88, #05d676); border-radius: 3px; }
-    .vol-warning { color: #ff4b4b; font-size: 0.7rem; font-weight: bold; }
+    .target-box { font-size: 0.75rem; padding-top: 5px; border-top: 1px solid #333; margin-top: 8px; }
+    .upside { color: #00ff88; }
+    .downside { color: #ff4b4b; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -51,14 +53,14 @@ valid_tickers = []
 with col_left:
     st.subheader("📁 Portfolio")
     for i in range(5):
-        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="e.g. TSLA")
+        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="e.g. AMZN")
         if name:
             ticker = get_ticker(name)
             if ticker: valid_tickers.append(ticker)
     
     if valid_tickers:
         st.markdown("---")
-        st.subheader("📊 Fundamental Snapshot")
+        st.subheader("📊 Ratings")
         for t in valid_tickers:
             try:
                 info = yf.Ticker(t).info
@@ -70,7 +72,6 @@ with col_left:
                         <span style="font-weight:bold; color:#00ff88;">{t}</span>
                         <span class="badge {cls}">{rec}</span>
                     </div>
-                    <div style="font-size:0.8rem; margin-top:5px; color:#aaa;">P/E: <span style="color:#fff;">{info.get('forwardPE', 'N/A')}</span></div>
                 </div>
                 """, unsafe_allow_html=True)
             except: pass
@@ -110,51 +111,63 @@ with col_right:
         fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- INSIGHT GRID ---
-        st.subheader("Asset Momentum & Insider Tracking")
+        # --- ASSET INTELLIGENCE CARDS ---
+        st.subheader("Asset Momentum & Analyst Targets")
         m_cols = st.columns(len(valid_tickers))
         
         for i, t in enumerate(valid_tickers):
             with m_cols[i]:
-                # Volatility Check
-                returns = chart_data[t].pct_change().dropna()
-                vol = returns.std() * np.sqrt(252) * 100
-                vol_html = f'<span class="vol-warning">⚠️ HIGH VOL</span>' if vol > 40 else ""
-                
-                ret = ((chart_data[t].iloc[-1] / chart_data[t].iloc[0]) - 1) * 100
-                st.metric(t, f"${chart_data[t].iloc[-1]:.2f}", f"{ret:.1f}%")
+                current_price = chart_data[t].iloc[-1]
+                ret_pct = ((current_price / chart_data[t].iloc[0]) - 1) * 100
+                st.metric(t, f"${current_price:.2f}", f"{ret_pct:.1f}%")
                 
                 try:
                     t_obj = yf.Ticker(t)
                     info = t_obj.info
-                    insider_buy = format_number(info.get('marketCap', 0) * 0.000042)
                     
-                    # Earnings Logic
-                    days_text = "N/A"
-                    try:
-                        cal = t_obj.calendar
-                        if 'Earnings Date' in cal:
-                            diff = (cal['Earnings Date'][0].replace(tzinfo=None) - datetime.now()).days
-                            days_text = f"{diff}d" if diff >= 0 else "Passed"
-                    except: pass
+                    # Pre-calculate labels
+                    m_cap = format_number(info.get('marketCap'))
+                    insider_val = format_number(info.get('marketCap', 0) * 0.000042)
+                    
+                    # Price Target Calculation
+                    target = info.get('targetMeanPrice')
+                    if target:
+                        diff = ((target / current_price) - 1) * 100
+                        target_class = "upside" if diff > 0 else "downside"
+                        target_html = f'Target: <span class="{target_class}">${target} ({diff:.1f}%)</span>'
+                    else:
+                        target_html = "Target: N/A"
 
+                    # Unified HTML rendering
                     st.markdown(f"""
                     <div class="stat-box">
                         <div class="stat-label">3M Insider Buy Vol</div>
-                        <div class="stat-value" style="color:#00ff88;">${insider_buy}</div>
+                        <div class="stat-value" style="color:#00ff88;">${insider_val}</div>
                         <div class="insider-bar"><div class="insider-fill" style="width: 65%;"></div></div>
                         
                         <div style="display:flex; justify-content:space-between; margin-top:10px;">
                             <div>
                                 <div class="stat-label">Market Cap</div>
-                                <div class="stat-value">{format_number(info.get('marketCap'))}</div>
+                                <div class="stat-value">{m_cap}</div>
                             </div>
                             <div style="text-align:right;">
-                                <div class="stat-label">Next Earnings</div>
-                                <div class="stat-value">{days_text}</div>
+                                <div class="stat-label">Sentiment</div>
+                                <div class="stat-value">{info.get('recommendationKey', 'N/A').title()}</div>
                             </div>
                         </div>
-                        <div style="margin-top:5px;">{vol_html}</div>
+                        <div class="target-box">
+                            {target_html}
+                        </div>
                     </div>
                     """, unsafe_allow_html=True)
-                except: st.caption(f"Data error for {t}")
+                except:
+                    st.error(f"Insight error: {t}")
+
+        # --- CORRELATION MATRIX ---
+        if len(valid_tickers) > 1:
+            st.markdown("---")
+            st.subheader("Portfolio Correlation")
+            corr = chart_data[valid_tickers].pct_change().corr()
+            fig_corr = go.Figure(data=go.Heatmap(z=corr.values, x=corr.index, y=corr.columns, colorscale='RdBu_r', zmin=-1, zmax=1))
+            fig_corr.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=10,b=0))
+            st.plotly_chart(fig_corr, use_container_width=True)
