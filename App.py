@@ -8,24 +8,13 @@ from datetime import datetime, timedelta
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Terminal Pro", layout="wide", initial_sidebar_state="collapsed")
 
-# --- CUSTOM CSS ---
+# --- UI STYLING ---
 st.markdown("""
     <style>
     .main { background-color: #000000; color: #ffffff; }
-    .stTextInput > div > div > input { background-color: #111 !important; color: #00ff88 !important; border: 1px solid #333 !important; }
-    .side-card { background: #111; padding: 12px; border-radius: 10px; border: 1px solid #222; margin-bottom: 15px; }
-    .stat-box { background: #161616; padding: 12px; border-radius: 8px; border: 1px solid #282828; margin-top: 5px; min-height: 160px; }
-    .stat-label { font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
-    .stat-value { font-size: 0.95rem; color: #fff; font-weight: bold; margin-bottom: 2px; }
-    .badge { padding: 3px 10px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; display: inline-block; }
-    .buy-bg { background-color: #00ff88; color: #000; }
-    .hold-bg { background-color: #f1c40f; color: #000; }
-    .sell-bg { background-color: #e74c3c; color: #fff; }
-    .insider-bar { height: 6px; background: #333; border-radius: 3px; margin: 6px 0; overflow: hidden; }
-    .insider-fill { height: 100%; background: linear-gradient(90deg, #00ff88, #05d676); border-radius: 3px; }
-    .target-box { font-size: 0.75rem; padding-top: 5px; border-top: 1px solid #333; margin-top: 8px; }
-    .upside { color: #00ff88; }
-    .downside { color: #ff4b4b; }
+    [data-testid="stMetricValue"] { font-size: 24px; color: #00ff88; }
+    /* Style for the container border */
+    [data-testid="stVerticalBlockBorderWrapper"] { border: 1px solid #333 !important; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -47,13 +36,13 @@ def format_number(num):
     return str(round(num, 2))
 
 # --- UI LAYOUT ---
-col_left, col_right = st.columns([1, 3.5])
+col_left, col_right = st.columns([1, 4])
 
 valid_tickers = []
 with col_left:
     st.subheader("📁 Portfolio")
     for i in range(5):
-        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="e.g. AMZN")
+        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="Ticker")
         if name:
             ticker = get_ticker(name)
             if ticker: valid_tickers.append(ticker)
@@ -64,109 +53,92 @@ with col_left:
         for t in valid_tickers:
             try:
                 info = yf.Ticker(t).info
-                rec = info.get('recommendationKey', 'N/A').replace('_', ' ').title()
-                cls = "buy-bg" if "Buy" in rec else "sell-bg" if "Sell" in rec else "hold-bg"
-                st.markdown(f"""
-                <div class="side-card">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <span style="font-weight:bold; color:#00ff88;">{t}</span>
-                        <span class="badge {cls}">{rec}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                rec = info.get('recommendationKey', 'N/A').upper()
+                st.write(f"**{t}**: {rec}")
             except: pass
 
 with col_right:
-    head_left, head_right = st.columns([2, 1])
-    with head_left: st.title("Performance Intelligence")
-    with head_right:
-        period_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "5y": 1825}
-        period_label = st.select_slider("Timeline", options=list(period_map.keys()), value="1y")
-        days_back = period_map[period_label]
+    h1, h2 = st.columns([3, 1])
+    h1.title("Performance Intelligence")
+    period_label = h2.select_slider("Timeline", options=["1mo", "3mo", "6mo", "1y", "2y", "5y"], value="1y")
+    
+    period_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "5y": 1825}
+    days_back = period_map[period_label]
 
     if valid_tickers:
-        raw_data = yf.download(valid_tickers + ["^GSPC"], period="max", progress=False)['Close']
-        if isinstance(raw_data, pd.Series): raw_data = raw_data.to_frame(name=valid_tickers[0])
+        # Fetching History (Price + Volume)
+        df_all = yf.download(valid_tickers + ["^GSPC"], period="max", progress=False)
+        close_data = df_all['Close']
+        vol_data = df_all['Volume']
         
-        start_date = raw_data.index[-1] - timedelta(days=days_back)
-        chart_data = raw_data.loc[start_date:].ffill()
+        if isinstance(close_data, pd.Series): close_data = close_data.to_frame(name=valid_tickers[0])
+        
+        start_date = close_data.index[-1] - timedelta(days=days_back)
+        chart_data = close_data.loc[start_date:].ffill()
         norm_data = (chart_data / chart_data.iloc[0]) * 100
 
-        # --- CHART ---
+        # --- PLOTLY CHART ---
         fig = go.Figure()
         for col in norm_data.columns:
-            if col == "^GSPC":
-                fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name="S&P 500", line=dict(dash='dash', color='#444')))
-            else:
-                fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name=col))
+            line_style = dict(dash='dash', color='#444') if col == "^GSPC" else None
+            fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name=col, line=line_style))
         
         if len(valid_tickers) == 1:
             p = valid_tickers[0]
-            ma50 = raw_data[p].rolling(50).mean().loc[start_date:]
-            ma200 = raw_data[p].rolling(200).mean().loc[start_date:]
+            ma50 = close_data[p].rolling(50).mean().loc[start_date:]
+            ma200 = close_data[p].rolling(200).mean().loc[start_date:]
             base = chart_data[p].iloc[0]
-            fig.add_trace(go.Scatter(x=ma50.index, y=(ma50/base)*100, name="50MA", line=dict(color='cyan', width=1.5)))
-            fig.add_trace(go.Scatter(x=ma200.index, y=(ma200/base)*100, name="200MA", line=dict(color='orange', width=1.5)))
+            fig.add_trace(go.Scatter(x=ma50.index, y=(ma50/base)*100, name="50MA", line=dict(color='cyan', width=1)))
+            fig.add_trace(go.Scatter(x=ma200.index, y=(ma200/base)*100, name="200MA", line=dict(color='orange', width=1)))
 
-        fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
+        fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.1))
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- ASSET INTELLIGENCE CARDS ---
-        st.subheader("Asset Momentum & Analyst Targets")
+        # --- ASSET CARDS ---
+        st.markdown("### Asset Momentum & Volume Analysis")
         m_cols = st.columns(len(valid_tickers))
         
         for i, t in enumerate(valid_tickers):
             with m_cols[i]:
-                current_price = chart_data[t].iloc[-1]
-                ret_pct = ((current_price / chart_data[t].iloc[0]) - 1) * 100
-                st.metric(t, f"${current_price:.2f}", f"{ret_pct:.1f}%")
+                # Price Metric
+                curr = chart_data[t].iloc[-1]
+                change = ((curr / chart_data[t].iloc[0]) - 1) * 100
+                st.metric(label=t, value=f"${curr:.2f}", delta=f"{change:.1f}%")
                 
-                try:
-                    t_obj = yf.Ticker(t)
-                    info = t_obj.info
-                    
-                    # Pre-calculate labels
-                    m_cap = format_number(info.get('marketCap'))
-                    insider_val = format_number(info.get('marketCap', 0) * 0.000042)
-                    
-                    # Price Target Calculation
-                    target = info.get('targetMeanPrice')
-                    if target:
-                        diff = ((target / current_price) - 1) * 100
-                        target_class = "upside" if diff > 0 else "downside"
-                        target_html = f'Target: <span class="{target_class}">${target} ({diff:.1f}%)</span>'
-                    else:
-                        target_html = "Target: N/A"
-
-                    # Unified HTML rendering
-                    st.markdown(f"""
-                    <div class="stat-box">
-                        <div class="stat-label">3M Insider Buy Vol</div>
-                        <div class="stat-value" style="color:#00ff88;">${insider_val}</div>
-                        <div class="insider-bar"><div class="insider-fill" style="width: 65%;"></div></div>
+                with st.container(border=True):
+                    try:
+                        # 1. Volume Surge Logic
+                        avg_vol = vol_data[t].rolling(20).mean().iloc[-1]
+                        last_vol = vol_data[t].iloc[-1]
+                        vol_ratio = last_vol / avg_vol
                         
-                        <div style="display:flex; justify-content:space-between; margin-top:10px;">
-                            <div>
-                                <div class="stat-label">Market Cap</div>
-                                <div class="stat-value">{m_cap}</div>
-                            </div>
-                            <div style="text-align:right;">
-                                <div class="stat-label">Sentiment</div>
-                                <div class="stat-value">{info.get('recommendationKey', 'N/A').title()}</div>
-                            </div>
-                        </div>
-                        <div class="target-box">
-                            {target_html}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                except:
-                    st.error(f"Insight error: {t}")
+                        if vol_ratio > 1.5:
+                            st.error(f"🚀 VOLUME SURGE: {vol_ratio:.1f}x")
+                        else:
+                            st.caption(f"Volume: {vol_ratio:.1f}x Avg")
 
-        # --- CORRELATION MATRIX ---
+                        # 2. Insider Buying (Simulated based on market cap)
+                        info = yf.Ticker(t).info
+                        insider_val = info.get('marketCap', 0) * 0.000042
+                        st.caption("3M INSIDER BUY VOL")
+                        st.write(f"**${format_number(insider_val)}**")
+                        st.progress(min(vol_ratio / 3, 1.0)) # Progress visualizes vol intensity
+                        
+                        # 3. Fundamentals
+                        st.write(f"**Market Cap:** {format_number(info.get('marketCap'))}")
+                        
+                        target = info.get('targetMeanPrice')
+                        if target:
+                            upside = ((target / curr) - 1) * 100
+                            color = "green" if upside > 0 else "red"
+                            st.markdown(f"**Target:** :{color}[${target} ({upside:.1f}%)]")
+                    except:
+                        st.error("Data Fetch Error")
+
+        # --- CORRELATION HEATMAP ---
         if len(valid_tickers) > 1:
             st.markdown("---")
-            st.subheader("Portfolio Correlation")
+            st.subheader("Portfolio Correlation Matrix")
             corr = chart_data[valid_tickers].pct_change().corr()
             fig_corr = go.Figure(data=go.Heatmap(z=corr.values, x=corr.index, y=corr.columns, colorscale='RdBu_r', zmin=-1, zmax=1))
             fig_corr.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=10,b=0))
