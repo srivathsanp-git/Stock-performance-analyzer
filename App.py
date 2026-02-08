@@ -8,10 +8,10 @@ from datetime import datetime, timedelta
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Intelligence Terminal", layout="wide", initial_sidebar_state="collapsed")
 
-# --- STYLE GUIDE: MIDNIGHT BLUE & DYNAMIC CONTRAST ---
+# --- STYLE GUIDE: EMERALD BOXES & BLACK TEXT ---
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
@@ -19,40 +19,36 @@ st.markdown("""
         color: #ffffff;
     }
     
-    /* Midnight Blue Asset Boxes */
+    /* Emerald Green Asset Boxes */
     [data-testid="stVerticalBlockBorderWrapper"] {
-        border: 1px solid #1e3a8a !important; /* Deep Blue Border */
-        border-radius: 16px !important;
-        background-color: #1e293b !important; /* Midnight Blue Fill */
-        padding: 22px !important;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        border: 2px solid #059669 !important; 
+        border-radius: 12px !important;
+        background-color: #10b981 !important; /* Bold Emerald Green */
+        padding: 20px !important;
     }
 
-    /* Accessibility Fix: High-Contrast Labels */
-    .label-dynamic { 
-        color: #cbd5e1; /* Light Silver-Blue for readability on dark blue */
+    /* Black Font for Asset Analysis */
+    .label-black { 
+        color: #000000; 
         font-size: 0.75rem; 
         text-transform: uppercase; 
-        letter-spacing: 0.08em;
-        font-weight: 500;
+        letter-spacing: 0.05em;
+        font-weight: 700;
+        opacity: 0.8;
     }
     
-    .value-bright { 
-        color: #ffffff; 
+    .value-black { 
+        color: #000000; 
         font-size: 1.1rem; 
-        font-weight: 600; 
+        font-weight: 800; 
         margin-bottom: 8px;
     }
 
-    /* Metric Customization */
-    [data-testid="stMetric"] {
-        background-color: #0f172a;
-        border: 1px solid #1e40af;
-        border-radius: 12px;
-    }
+    /* Metric Formatting */
+    [data-testid="stMetricValue"] { color: #ffffff !important; font-weight: 700; }
+    [data-testid="stMetricLabel"] { color: #10b981 !important; font-weight: 600; }
     
-    .accent-buy { color: #4ade80; font-weight: bold; }
-    .accent-sell { color: #f87171; font-weight: bold; }
+    .insider-text { color: #000000; font-weight: 700; font-size: 0.9rem; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -80,16 +76,16 @@ col_left, col_right = st.columns([1, 4])
 
 valid_tickers = []
 with col_left:
-    st.markdown("<h3 style='font-weight:600; color:#60a5fa;'>Portfolio</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='font-weight:700; color:#10b981;'>PORTFOLIO</h3>", unsafe_allow_html=True)
     for i in range(5):
-        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="e.g. TSLA")
+        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="Ticker")
         if name:
             ticker = get_ticker(name)
             if ticker: valid_tickers.append(ticker)
 
 with col_right:
     h1, h2 = st.columns([3, 1])
-    h1.markdown("<h1 style='font-weight:600; letter-spacing:-0.03em;'>Intelligence Terminal</h1>", unsafe_allow_html=True)
+    h1.markdown("<h1 style='font-weight:700;'>Intelligence Terminal</h1>", unsafe_allow_html=True)
     period_label = h2.select_slider("Range", options=["1mo", "3mo", "6mo", "1y", "2y", "5y"], value="1y")
     days_back = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "5y": 1825}[period_label]
 
@@ -100,20 +96,29 @@ with col_right:
         chart_data = close_data.loc[start_date:].ffill()
         norm_data = (chart_data / chart_data.iloc[0]) * 100
 
-        # --- CHART ---
+        # --- DYNAMIC COLOR CHART ---
+        # Professional palette: Blue, Orange, Purple, Pink, Yellow
+        chart_colors = ["#3b82f6", "#f97316", "#a855f7", "#ec4899", "#eab308"]
+        
         fig = go.Figure()
-        for col in norm_data.columns:
-            color = "#60a5fa" if col != "^GSPC" else "#475569"
-            fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name=col, 
-                                     line=dict(color=color, width=2.5 if col != "^GSPC" else 1.5)))
+        for idx, col in enumerate(norm_data.columns):
+            if col == "^GSPC":
+                line_cfg = dict(color="#4b5563", width=1.5, dash='dash')
+                display_name = "S&P 500"
+            else:
+                # Cycle through colors based on ticker index
+                line_cfg = dict(color=chart_colors[idx % len(chart_colors)], width=3)
+                display_name = col
+                
+            fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name=display_name, line=line_cfg))
         
         fig.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                          height=380, margin=dict(l=0,r=0,t=10,b=0),
-                          xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#1e293b'))
+                          height=400, margin=dict(l=0,r=0,t=10,b=0),
+                          xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#1f2937'))
         st.plotly_chart(fig, use_container_width=True)
 
         # --- ASSET CARDS ---
-        st.markdown("<h3 style='margin-top:20px; font-weight:600;'>Asset Analysis</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='margin-top:20px; font-weight:700; color:#10b981;'>ASSET ANALYSIS</h3>", unsafe_allow_html=True)
         m_cols = st.columns(len(valid_tickers))
         
         for i, t in enumerate(valid_tickers):
@@ -130,25 +135,25 @@ with col_right:
                 st.metric(label=t, value=f"${curr:.2f}", delta=f"{change:.1f}%")
                 
                 with st.container(border=True):
-                    # Valuation
-                    st.markdown("<p class='label-dynamic'>Earnings Multiples</p>", unsafe_allow_html=True)
-                    st.markdown(f"<p class='value-bright'>P/E: {format_val(info.get('trailingPE'))} <span style='font-size:0.8rem; color:#94a3b8;'>/ Fwd: {format_val(info.get('forwardPE'))}</span></p>", unsafe_allow_html=True)
+                    # Valuation - All Black Text
+                    st.markdown("<p class='label-black'>Valuation</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p class='value-black'>P/E: {format_val(info.get('trailingPE'))} <br>Fwd: {format_val(info.get('forwardPE'))}</p>", unsafe_allow_html=True)
                     
                     # Yield
                     dy = info.get('dividendYield', 0)
-                    dy_pct = f"{dy * 100:.2f}%" if dy else "0.00%"
-                    st.markdown("<p class='label-dynamic'>Dividend Yield</p>", unsafe_allow_html=True)
-                    st.markdown(f"<p class='value-bright'>{dy_pct}</p>", unsafe_allow_html=True)
+                    st.markdown("<p class='label-black'>Dividend Yield</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p class='value-black'>{dy * 100:.2f}%</p>" if dy else "<p class='value-black'>0.00%</p>", unsafe_allow_html=True)
                     
                     # Insider Flow
-                    st.markdown("<p class='label-dynamic'>3M Insider Flow</p>", unsafe_allow_html=True)
+                    st.markdown("<p class='label-black'>3M Insider Flow</p>", unsafe_allow_html=True)
                     m_cap = info.get('marketCap', 0)
-                    st.markdown(f"<p class='value-bright'><span class='accent-buy'>↑ ${format_val(m_cap * 0.00004)}</span> <span class='accent-sell'>↓ ${format_val(m_cap * 0.000015)}</span></p>", unsafe_allow_html=True)
+                    buy_v = format_val(m_cap * 0.00004)
+                    sell_v = format_val(m_cap * 0.000015)
+                    st.markdown(f"<p class='insider-text'>Buy: ${buy_v}<br>Sell: ${sell_v}</p>", unsafe_allow_html=True)
                     
                     # Target
                     target = info.get('targetMeanPrice')
                     if target:
                         upside = ((target / curr) - 1) * 100
-                        u_color = "#4ade80" if upside > 0 else "#f87171"
-                        st.markdown("<p class='label-dynamic'>Analyst Upside</p>", unsafe_allow_html=True)
-                        st.markdown(f"<p class='value-bright' style='color:{u_color};'>{upside:.1f}%</p>", unsafe_allow_html=True)
+                        st.markdown("<p class='label-black'>Analyst Target</p>", unsafe_allow_html=True)
+                        st.markdown(f"<p class='value-black'>{upside:.1f}% Upside</p>", unsafe_allow_html=True)
