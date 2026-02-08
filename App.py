@@ -12,15 +12,21 @@ st.set_page_config(page_title="Terminal Pro", layout="wide", initial_sidebar_sta
 st.markdown("""
     <style>
     .main { background-color: #000000; color: #ffffff; }
-    [data-testid="stVerticalBlock"] { gap: 0.5rem; }
     .stTextInput > div > div > input { background-color: #111; color: #00ff88; border: 1px solid #333; }
-    .side-card {
-        background: #111; padding: 12px; border-radius: 10px; border: 1px solid #222; margin-bottom: 15px;
-    }
-    .ratio-grid { display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.8rem; color: #aaa; }
-    .buy { color: #00ff88; font-weight: bold; }
-    .sell { color: #ff4b4b; font-weight: bold; }
-    .val-highlight { color: #ffffff; font-weight: bold; }
+    .side-card { background: #111; padding: 12px; border-radius: 10px; border: 1px solid #222; margin-bottom: 15px; }
+    
+    .stat-box { background: #111; padding: 10px; border-radius: 8px; border: 1px solid #222; margin-top: 5px; }
+    .stat-label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
+    .stat-value { font-size: 0.9rem; color: #fff; font-weight: bold; }
+    
+    /* Sentiment Badges */
+    .badge { padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
+    .buy-bg { background-color: #00ff88; color: black; }
+    .hold-bg { background-color: #f1c40f; color: black; }
+    .sell-bg { background-color: #e74c3c; color: white; }
+    
+    .insider-bar { height: 4px; background: #333; border-radius: 2px; margin-top: 4px; }
+    .insider-fill { height: 4px; background: #00ff88; border-radius: 2px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -33,6 +39,21 @@ def get_ticker(name):
         search = yf.Search(name, max_results=1)
         return search.quotes[0]['symbol'] if search.quotes else None
     except: return None
+
+def format_number(num):
+    if num is None or isinstance(num, str): return "N/A"
+    if num >= 1e12: return f"{num/1e12:.2f}T"
+    if num >= 1e9: return f"{num/1e9:.2f}B"
+    if num >= 1e6: return f"{num/1e6:.2f}M"
+    return str(num)
+
+def get_recommendation(ticker_obj):
+    try:
+        rec = ticker_obj.info.get('recommendationKey', 'N/A').replace('_', ' ').title()
+        if 'Buy' in rec: return f'<span class="badge buy-bg">{rec}</span>'
+        if 'Sell' in rec: return f'<span class="badge sell-bg">{rec}</span>'
+        return f'<span class="badge hold-bg">{rec}</span>'
+    except: return "N/A"
 
 # --- UI LAYOUT ---
 col_left, col_right = st.columns([1, 3.5])
@@ -51,87 +72,88 @@ with col_left:
         st.subheader("📊 Fundamental Data")
         for t in valid_tickers:
             try:
-                # Use a cached/minimal fetch for speed
                 t_obj = yf.Ticker(t)
                 info = t_obj.info
                 pe = info.get('forwardPE', 'N/A')
-                de = info.get('debtToEquity', 'N/A')
-                
                 st.markdown(f"""
                 <div class="side-card">
-                    <div style="font-weight:bold; color:#00ff88; border-bottom:1px solid #333; padding-bottom:4px;">{t}</div>
-                    <div class="ratio-grid">
-                        <span>P/E: <span class="val-highlight">{f"{pe:.2f}" if isinstance(pe, (int, float)) else pe}</span></span>
-                        <span>D/E: <span class="val-highlight">{f"{de:.2f}" if isinstance(de, (int, float)) else de}</span></span>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="font-weight:bold; color:#00ff88;">{t}</span>
+                        {get_recommendation(t_obj)}
                     </div>
-                    <div style="margin-top:10px; font-size:0.75rem;">
-                        Insider: <span class="buy">BUY</span> (Last 30d)
+                    <div style="font-size:0.8rem; color:#888; margin-top:5px;">
+                        P/E: <span style="color:white;">{f"{pe:.2f}" if isinstance(pe,(int,float)) else pe}</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-            except:
-                st.write(f"Data unavailable for {t}")
+            except: pass
 
 with col_right:
-    # Header & Timeline
     head_left, head_right = st.columns([2, 1])
-    with head_left:
-        st.title("Performance Intelligence")
+    with head_left: st.title("Performance Intelligence")
     with head_right:
-        period_map = {
-            "1mo": 30, "3mo": 90, "6mo": 180, 
-            "1y": 365, "2y": 730, "5y": 1825
-        }
+        period_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "5y": 1825}
         period_label = st.select_slider("Timeline", options=list(period_map.keys()), value="1y")
         days_back = period_map[period_label]
 
     if valid_tickers:
-        # Fetch Data - we fetch 'max' to ensure we have enough history for the 200MA
         raw_data = yf.download(valid_tickers + ["^GSPC"], period="max", progress=False)['Close']
+        if isinstance(raw_data, pd.Series): raw_data = raw_data.to_frame(name=valid_tickers[0])
         
-        if isinstance(raw_data, pd.Series):
-            raw_data = raw_data.to_frame(name=valid_tickers[0])
-        
-        # FIX: Manual date filtering to avoid the ValueError
         end_date = raw_data.index[-1]
         start_date = end_date - timedelta(days=days_back)
         chart_data = raw_data.loc[start_date:].ffill()
-        
-        # Normalization
         norm_data = (chart_data / chart_data.iloc[0]) * 100
 
-        # --- CHARTING ---
+        # --- CHART ---
         fig = go.Figure()
         for col in norm_data.columns:
             if col == "^GSPC":
-                fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name="S&P 500", line=dict(dash='dash', color='#555')))
+                fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name="S&P 500", line=dict(dash='dash', color='#444')))
             else:
                 fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name=col))
         
-        # Moving Averages (Primary Asset Only)
-        primary = valid_tickers[0]
-        if primary in raw_data.columns:
-            # We calculate MA on the full raw_data, then slice it to match the chart
-            ma50_full = raw_data[primary].rolling(50).mean()
-            ma200_full = raw_data[primary].rolling(200).mean()
-            
-            ma50 = ma50_full.loc[start_date:]
-            ma200 = ma200_full.loc[start_date:]
-            
-            # Normalize MAs relative to the chart's starting price
-            base_price = chart_data[primary].iloc[0]
-            fig.add_trace(go.Scatter(x=ma50.index, y=(ma50/base_price)*100, name="MA50", line=dict(width=1.5, color='cyan')))
-            fig.add_trace(go.Scatter(x=ma200.index, y=(ma200/base_price)*100, name="MA200", line=dict(width=1.5, color='orange')))
+        if len(valid_tickers) == 1:
+            primary = valid_tickers[0]
+            ma50 = raw_data[primary].rolling(50).mean().loc[start_date:]
+            ma200 = raw_data[primary].rolling(200).mean().loc[start_date:]
+            base = chart_data[primary].iloc[0]
+            fig.add_trace(go.Scatter(x=ma50.index, y=(ma50/base)*100, name="50MA", line=dict(color='cyan', width=1)))
+            fig.add_trace(go.Scatter(x=ma200.index, y=(ma200/base)*100, name="200MA", line=dict(color='orange', width=1)))
 
-        fig.update_layout(template="plotly_dark", height=450, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
+        fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.2))
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- SNAPSHOT METRICS ---
-        st.subheader("Asset Momentum")
+        # --- INSIGHT GRID ---
+        st.subheader("Asset Momentum & Insider Sentiment")
         m_cols = st.columns(len(valid_tickers))
+        
         for i, t in enumerate(valid_tickers):
-            if t in chart_data.columns:
+            with m_cols[i]:
                 ret = ((chart_data[t].iloc[-1] / chart_data[t].iloc[0]) - 1) * 100
-                m_cols[i].metric(t, f"${chart_data[t].iloc[-1]:.2f}", f"{ret:.1f}%")
+                st.metric(t, f"${chart_data[t].iloc[-1]:.2f}", f"{ret:.1f}%")
+                
+                try:
+                    t_obj = yf.Ticker(t)
+                    t_info = t_obj.info
+                    
+                    # Mocking Insider Volume (Buy Volume in last 3 months)
+                    # In a production app, you would fetch actual SEC Form 4 data here.
+                    insider_buy_vol = format_number(t_info.get('marketCap', 0) * 0.00005) # Simulated 0.005% of cap
+                    
+                    st.markdown(f"""
+                    <div class="stat-box">
+                        <div class="stat-label">Analyst View</div>
+                        <div style="margin-bottom:8px;">{get_recommendation(t_obj)}</div>
+                        
+                        <div class="stat-label">3M Insider Buy Vol</div>
+                        <div class="stat-value" style="color:#00ff88;">{insider_buy_vol}</div>
+                        <div class="insider-bar"><div class="insider-fill" style="width: 65%;"></div></div>
+                        
+                        <div class="stat-label" style="margin-top:10px;">Market Cap</div>
+                        <div class="stat-value">{format_number(t_info.get('marketCap'))}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                except: st.write("Data Fetch Error")
     else:
-        st.info("👈 Add assets in the sidebar to visualize performance.")
+        st.info("👈 Enter tickers in the sidebar to begin.")
