@@ -19,6 +19,7 @@ st.markdown("""
         color: #ffffff;
     }
     
+    /* Emerald Container Styling */
     [data-testid="stVerticalBlockBorderWrapper"] {
         border: 2px solid #059669 !important; 
         border-radius: 14px !important;
@@ -63,8 +64,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- UTILS ---
-def get_ticker(name):
+# --- CACHED UTILS ---
+
+@st.cache_data(ttl=3600)
+def get_ticker_symbol(name):
+    """Resolves names to tickers and caches results to prevent rate limits."""
     name = name.strip()
     if not name: return None
     if name.isupper() and 1 <= len(name) <= 5: return name
@@ -72,6 +76,19 @@ def get_ticker(name):
         search = yf.Search(name, max_results=1)
         return search.quotes[0]['symbol'] if search.quotes else None
     except: return None
+
+@st.cache_data(ttl=3600)
+def get_asset_info(ticker):
+    """Fetches fundamental data with error handling for rate limits."""
+    try:
+        return yf.Ticker(ticker).info
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=600)
+def download_data(tickers, period="max"):
+    """Downloads price data in one batch."""
+    return yf.download(tickers, period=period, progress=False)['Close']
 
 def format_val(val, suffix=""):
     if val is None or val == "N/A" or val == 0: return "—"
@@ -89,9 +106,9 @@ valid_tickers = []
 with col_left:
     st.markdown("<h3 style='font-weight:700; color:#10b981;'>PORTFOLIO</h3>", unsafe_allow_html=True)
     for i in range(5):
-        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="Ticker")
+        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="Ticker or Name")
         if name:
-            ticker = get_ticker(name)
+            ticker = get_ticker_symbol(name)
             if ticker: valid_tickers.append(ticker)
 
 with col_right:
@@ -102,7 +119,9 @@ with col_right:
 
     if valid_tickers:
         # Data Pull
-        df_all = yf.download(valid_tickers + ["^GSPC"], period="max", progress=False)['Close']
+        all_symbols = list(set(valid_tickers + ["^GSPC"]))
+        df_all = download_data(all_symbols)
+        
         start_date = df_all.index[-1] - timedelta(days=days_back)
         chart_data = df_all.loc[start_date:].ffill()
         norm_data = (chart_data / chart_data.iloc[0]) * 100
@@ -110,12 +129,19 @@ with col_right:
         # --- DYNAMIC COLOR CHART ---
         chart_colors = ["#3b82f6", "#f97316", "#a855f7", "#ec4899", "#eab308"]
         fig = go.Figure()
+        
         for idx, col in enumerate(norm_data.columns):
-            line_cfg = dict(color="#4b5563", width=1.5, dash='dash') if col == "^GSPC" else dict(color=chart_colors[idx % len(chart_colors)], width=3)
-            fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name=col, line=line_cfg))
+            if col == "^GSPC":
+                line_cfg = dict(color="#4b5563", width=1.5, dash='dash')
+                label = "S&P 500"
+            else:
+                line_cfg = dict(color=chart_colors[idx % len(chart_colors)], width=3)
+                label = col
+            fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name=label, line=line_cfg))
         
         fig.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                          height=380, margin=dict(l=0,r=0,t=10,b=0), xaxis=dict(showgrid=False))
+                          height=380, margin=dict(l=0,r=0,t=10,b=0), xaxis=dict(showgrid=False),
+                          legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig, use_container_width=True)
 
         # --- ASSET CARDS ---
@@ -124,11 +150,13 @@ with col_right:
         
         for i, t in enumerate(valid_tickers):
             with m_cols[i]:
-                t_obj = yf.Ticker(t)
-                info = t_obj.info
-                curr = chart_data[t].iloc[-1]
+                info = get_asset_info(t)
                 
-                if info.get('logo_url'): st.image(info.get('logo_url'), width=55)
+                # Logic to handle Series vs DataFrame indexing
+                if isinstance(chart_data, pd.DataFrame) and t in chart_data.columns:
+                    curr = chart_data[t].iloc[-1]
+                else:
+                    curr = chart_data.iloc[-1]
                 
                 st.markdown(f"<p class='ticker-header'>{t}</p>", unsafe_allow_html=True)
                 st.markdown(f"<p class='price-sub'>${curr:.2f}</p>", unsafe_allow_html=True)
@@ -138,23 +166,19 @@ with col_right:
                     st.markdown("<p class='label-black'>Valuation</p>", unsafe_allow_html=True)
                     st.markdown(f"<p class='value-black'>P/E: {format_val(info.get('trailingPE'))} | Fwd: {format_val(info.get('forwardPE'))}</p>", unsafe_allow_html=True)
                     
-                    # Dividend Yield (SANITY CHECKED)
-                    raw_div = info.get('dividendYield', 0)
-                    # If yield is > 0.2 (20%), it's likely a raw percentage (e.g., 92 instead of 0.92)
+                    # Dividend Yield
+                    raw_div = info.get('dividendYield', 0) or 0
                     div_val = raw_div if raw_div < 0.2 else raw_div / 100
                     st.markdown("<p class='label-black'>Dividend Yield</p>", unsafe_allow_html=True)
                     st.markdown(f"<p class='value-black'>{div_val * 100:.2f}%</p>", unsafe_allow_html=True)
                     
-                    # Insider Flow (3M Estimate)
-                    mcap = info.get('marketCap', 0)
-                    buy_est = mcap * 0.000038
-                    sell_est = mcap * 0.000014
-                    st.markdown("<p class='label-black'>3M Insider Flow</p>", unsafe_allow_html=True)
-                    st.markdown(f"<p class='value-black'>Buy: ${format_val(buy_est)}<br>Sell: ${format_val(sell_est)}</p>", unsafe_allow_html=True)
-                    
                     # Analyst Target
                     target = info.get('targetMeanPrice')
+                    st.markdown("<p class='label-black'>Price Target</p>", unsafe_allow_html=True)
                     if target:
                         upside = ((target / curr) - 1) * 100
-                        st.markdown("<p class='label-black'>Price Target</p>", unsafe_allow_html=True)
                         st.markdown(f"<p class='value-black'>${target} ({upside:.1f}%)</p>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<p class='value-black'>—</p>", unsafe_allow_html=True)
+    else:
+        st.info("👈 Enter stock tickers or names in the sidebar to begin.")
