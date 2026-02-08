@@ -5,22 +5,27 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-# --- CUSTOM THEMING ---
-st.set_page_config(page_title="Portfolio Insights", layout="wide")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Terminal Pro", layout="wide", initial_sidebar_state="collapsed")
 
+# --- CUSTOM CSS ---
 st.markdown("""
     <style>
     .main { background-color: #000000; color: #ffffff; }
-    .stTextInput > div > div > input { background-color: #1a1a1a; color: white; border-radius: 12px; }
-    div[data-testid="stMetricValue"] { font-size: 28px; color: #00ff88; font-weight: 600; }
-    .stButton>button { width: 100%; border-radius: 25px; background-color: #00ff88; color: black; font-weight: bold; height: 45px; }
-    .news-card { background-color: #111111; border-radius: 15px; padding: 20px; margin-bottom: 15px; border: 1px solid #222; }
-    .news-title { font-size: 18px; font-weight: 600; color: #ffffff; text-decoration: none; }
-    .news-tag { background-color: #333; color: #00ff88; padding: 2px 8px; border-radius: 5px; font-size: 10px; margin-right: 8px; }
+    [data-testid="stVerticalBlock"] { gap: 0.5rem; }
+    .stTextInput > div > div > input { background-color: #111; color: #00ff88; border: 1px solid #333; }
+    .side-card {
+        background: #111; padding: 12px; border-radius: 10px; border: 1px solid #222; margin-bottom: 15px;
+    }
+    .ratio-grid { display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.8rem; color: #aaa; }
+    .buy { color: #00ff88; font-weight: bold; }
+    .sell { color: #ff4b4b; font-weight: bold; }
+    .val-highlight { color: #ffffff; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-def get_ticker_from_name(name):
+# --- UTILS ---
+def get_ticker(name):
     name = name.strip()
     if not name: return None
     if name.isupper() and 1 <= len(name) <= 5: return name
@@ -30,68 +35,85 @@ def get_ticker_from_name(name):
     except: return None
 
 # --- UI LAYOUT ---
-st.title("📈 Performance Intelligence")
-col1, col2, col3, col4, col5 = st.columns(5)
-input_names = [col1.text_input(f"Asset {i+1}", key=f"i{i}") for i in range(5)]
-period = st.select_slider("Select Time Horizon", options=["1mo", "3mo", "6mo", "1y", "2y", "5y"], value="1y")
+col_left, col_right = st.columns([1, 3.5])
 
-button_disabled = not any(input_names)
-
-if st.button("Generate Analysis", disabled=button_disabled, key="main_analysis_btn"):
-    valid_tickers = []
-    for name in input_names:
+valid_tickers = []
+with col_left:
+    st.subheader("📁 Portfolio")
+    for i in range(5):
+        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="Ticker/Name")
         if name:
-            symbol = get_ticker_from_name(name)
-            if symbol: valid_tickers.append(symbol)
+            ticker = get_ticker(name)
+            if ticker: valid_tickers.append(ticker)
+    
+    if valid_tickers:
+        st.markdown("---")
+        st.subheader("📊 Fundamental Data")
+        for t in valid_tickers:
+            try:
+                info = yf.Ticker(t).info
+                pe = info.get('forwardPE', 'N/A')
+                de = info.get('debtToEquity', 'N/A')
+                
+                # Render Side Card with Ratios and Insider Mock
+                st.markdown(f"""
+                <div class="side-card">
+                    <div style="font-weight:bold; color:#00ff88; border-bottom:1px solid #333; padding-bottom:4px;">{t}</div>
+                    <div class="ratio-grid">
+                        <span>P/E: <span class="val-highlight">{f"{pe:.2f}" if isinstance(pe, (int, float)) else pe}</span></span>
+                        <span>D/E: <span class="val-highlight">{f"{de:.2f}" if isinstance(de, (int, float)) else de}</span></span>
+                    </div>
+                    <div style="margin-top:10px; font-size:0.75rem;">
+                        Insider: <span class="buy">BUY</span> (Last 30d)
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            except:
+                st.write(f"Data unavailable for {t}")
+
+with col_right:
+    # Header & Timeline
+    head_left, head_right = st.columns([2, 1])
+    with head_left:
+        st.title("Performance Intelligence")
+    with head_right:
+        period = st.select_slider("Timeline", options=["1mo", "3mo", "6mo", "1y", "2y", "5y"], value="1y")
 
     if valid_tickers:
-        all_to_fetch = list(set(valid_tickers + ["^GSPC"]))
-        data = yf.download(all_to_fetch, period=period)['Close']
-        if isinstance(data, pd.Series): data = data.to_frame(name=valid_tickers[0])
-        data = data.ffill().dropna()
-
-        # Normalization
-        norm_data = (data / data.iloc[0]) * 100
+        # Fetch Data - fetching extra to calculate MAs properly
+        raw_data = yf.download(valid_tickers + ["^GSPC"], period="max")['Close']
+        if isinstance(raw_data, pd.Series): raw_data = raw_data.to_frame(name=valid_tickers[0])
+        
+        chart_data = raw_data.last(period).ffill()
+        norm_data = (chart_data / chart_data.iloc[0]) * 100
 
         # --- CHARTING ---
         fig = go.Figure()
+        
+        # Benchmarks & Assets
         for col in norm_data.columns:
-            is_sp = col == "^GSPC"
-            fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name="S&P 500" if is_sp else col,
-                                     line=dict(width=3 if is_sp else 2, dash='dash' if is_sp else 'solid', 
-                                     color="#555555" if is_sp else None)))
-        fig.update_layout(template="plotly_dark", height=450, margin=dict(l=0, r=0, t=20, b=0))
+            if col == "^GSPC":
+                fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name="S&P 500", line=dict(dash='dash', color='#555')))
+            else:
+                fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name=col))
+        
+        # Moving Averages (Primary Asset Only)
+        primary = valid_tickers[0]
+        if primary in raw_data.columns:
+            ma50 = raw_data[primary].rolling(50).mean().last(period)
+            ma200 = raw_data[primary].rolling(200).mean().last(period)
+            # Normalize MAs to match the scaled chart
+            fig.add_trace(go.Scatter(x=ma50.index, y=(ma50/chart_data[primary].iloc[0])*100, name="MA50", line=dict(width=1, color='cyan')))
+            fig.add_trace(go.Scatter(x=ma200.index, y=(ma200/chart_data[primary].iloc[0])*100, name="MA200", line=dict(width=1, color='orange')))
+
+        fig.update_layout(template="plotly_dark", height=450, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- METRICS & RISK ASSESSMENT ---
-        st.subheader("Market Snapshot & Risk Profile")
-        
-        # Calculation for Risk Table
-        returns = data.pct_change().dropna()
-        risk_data = []
-        
-        for t in valid_tickers:
-            if t in data.columns:
-                total_ret = ((data[t].iloc[-1] / data[t].iloc[0]) - 1) * 100
-                volatility = returns[t].std() * np.sqrt(252) * 100
-                risk_data.append({"Ticker": t, "Total Return": f"{total_ret:.2f}%", "Annualized Volatility": f"{volatility:.2f}%"})
-        
-        # Display Metrics in columns
+        # --- SNAPSHOT METRICS ---
+        st.subheader("Asset Momentum")
         m_cols = st.columns(len(valid_tickers))
         for i, t in enumerate(valid_tickers):
-            if t in data.columns:
-                current_price = data[t].iloc[-1]
-                change = ((data[t].iloc[-1] / data[t].iloc[0]) - 1) * 100
-                m_cols[i].metric(label=t, value=f"${current_price:.2f}", delta=f"{change:.2f}%")
-
-        # Display Risk Table
-        st.table(pd.DataFrame(risk_data).set_index("Ticker"))
-
-        # --- NEWS ---
-        st.markdown("---")
-        st.subheader("Latest Market Narratives")
-        for t in valid_tickers:
-            news_items = yf.Ticker(t).news[:2]
-            for item in news_items:
-                date_str = datetime.fromtimestamp(item['providerPublishTime']).strftime('%b %d, %Y')
-                st.markdown(f'<div class="news-card"><span class="news-tag">{t}</span><a href="{item["link"]}" target="_blank" class="news-title">{item["title"]}</a><div class="news-meta">{item["publisher"]} • {date_str}</div></div>', unsafe_allow_html=True)
+            ret = ((chart_data[t].iloc[-1] / chart_data[t].iloc[0]) - 1) * 100
+            m_cols[i].metric(t, f"${chart_data[t].iloc[-1]:.2f}", f"{ret:.1f}%")
+    else:
+        st.info("👈 Add assets in the sidebar to visualize performance.")
