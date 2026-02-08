@@ -26,7 +26,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- UTILS ---
+# --- RESILIENT DATA FETCHING ---
+
 @st.cache_data(ttl=3600)
 def get_ticker_symbol(name):
     try:
@@ -35,48 +36,56 @@ def get_ticker_symbol(name):
         return search.quotes[0]['symbol'] if search.quotes else None
     except: return None
 
-@st.cache_data(ttl=1800)
-def get_smart_info(t_str):
-    """Attempts to get full info but falls back to fast_info to prevent total blackout."""
-    t = yf.Ticker(t_str)
+@st.cache_data(ttl=3600)
+def fetch_valuation_metrics(t_str, curr_price):
+    """Bypasses basic blocks to calculate Trailing and Forward P/E."""
     try:
-        # This contains P/E and Dividends
-        info = t.info 
-        if info and len(info) > 10: return info
+        t = yf.Ticker(t_str)
+        info = t.info
+        
+        # 1. Trailing P/E Logic
+        t_pe = info.get('trailingPE')
+        if not t_pe:
+            eps = info.get('trailingEps')
+            t_pe = curr_price / eps if eps and eps > 0 else 0
+            
+        # 2. Forward P/E Logic
+        f_pe = info.get('forwardPE')
+        if not f_pe:
+            f_eps = info.get('forwardEps')
+            f_pe = curr_price / f_eps if f_eps and f_eps > 0 else 0
+
+        # 3. Dividend Logic
+        divs = t.dividends
+        last_div = divs.iloc[-1] if not divs.empty else 0
+        q_yield = (last_div / curr_price) * 100 if last_div > 0 else 0
+
+        return {
+            "t_pe": t_pe,
+            "f_pe": f_pe,
+            "q_div": last_div,
+            "q_yield": q_yield,
+            "mcap": t.fast_info.get('market_cap', 0)
+        }
     except:
-        pass
-    
-    try:
-        # Fallback for Market Cap if .info is blocked
-        f_info = t.fast_info
-        return {"marketCap": f_info.get("market_cap"), "trailingPE": "Throttled", "dividendYield": 0}
-    except:
-        return {}
+        return {"t_pe": 0, "f_pe": 0, "q_div": 0, "q_yield": 0, "mcap": 0}
 
 @st.cache_data(ttl=600)
 def fetch_history(tickers):
     return yf.download(list(set(tickers)), period="2y", progress=False)
 
-def format_val(val, suffix="", is_pct=False):
-    if val is None or val == 0 or val == "—": return "—"
-    if val == "Throttled": return "Throttled"
-    try:
-        v = float(val)
-        if is_pct: return f"{v*100:.2f}%"
-        if v >= 1e12: return f"{v/1e12:.1f}T{suffix}"
-        if v >= 1e9: return f"{v/1e9:.1f}B{suffix}"
-        if v >= 1e6: return f"{v/1e6:.1f}M{suffix}"
-        return f"{v:,.2f}{suffix}"
-    except: return "—"
+def format_num(val):
+    if not val or val == 0 or np.isnan(val): return "—"
+    return f"{val:.2f}"
 
-# --- UI ---
+# --- UI LAYOUT ---
 col_left, col_right = st.columns([1, 4.2])
 
 valid_tickers = []
 with col_left:
     st.markdown("<h3 style='font-weight:700; color:#10b981;'>PORTFOLIO</h3>", unsafe_allow_html=True)
     for i in range(5):
-        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="Symbol")
+        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="Ticker")
         if name:
             sym = get_ticker_symbol(name)
             if sym: valid_tickers.append(sym)
@@ -85,10 +94,10 @@ with col_right:
     h1, h2 = st.columns([3, 1])
     h1.markdown("<h1 style='font-weight:700;'>Intelligence Terminal</h1>", unsafe_allow_html=True)
     period_label = h2.select_slider("Range", options=["1mo", "3mo", "6mo", "1y", "2y"], value="1y")
-    
+
     if valid_tickers:
         hist = fetch_history(valid_tickers + ["^GSPC"])
-        prices, volumes = hist['Close'], hist['Volume']
+        prices = hist['Close']
         
         # Performance Chart
         days = {"1mo":30, "3mo":90, "6mo":180, "1y":365, "2y":730}[period_label]
@@ -101,38 +110,39 @@ with col_right:
         st.plotly_chart(fig, use_container_width=True)
 
         # Asset Analysis
-        st.markdown("<h3 style='color:#10b981; font-weight:700;'>MARKET INTELLIGENCE</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='color:#10b981; font-weight:700;'>VALUATION & FLOW</h3>", unsafe_allow_html=True)
         cols = st.columns(len(valid_tickers))
         
         for i, t in enumerate(valid_tickers):
             with cols[i]:
-                info = get_smart_info(t)
                 raw_p = prices[t].iloc[-1]
                 curr_p = float(raw_p.iloc[0]) if hasattr(raw_p, "__len__") else float(raw_p)
+                
+                # Metrics Fetch
+                m = fetch_valuation_metrics(t, curr_p)
                 
                 st.markdown(f"<p class='ticker-header'>{t}</p>", unsafe_allow_html=True)
                 st.markdown(f"<p class='price-sub'>${curr_p:.2f}</p>", unsafe_allow_html=True)
                 
                 with st.container(border=True):
-                    # 1. Valuation (P/E Ratios)
-                    st.markdown("<p class='label-black'>P/E (Trailing | Fwd)</p>", unsafe_allow_html=True)
-                    pe = format_val(info.get('trailingPE'))
-                    fpe = format_val(info.get('forwardPE'))
-                    st.markdown(f"<p class='value-black'>{pe} | {fpe}</p>", unsafe_allow_html=True)
+                    # 1. Trailing P/E
+                    st.markdown("<p class='label-black'>Trailing P/E</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p class='value-black'>{format_num(m['t_pe'])}</p>", unsafe_allow_html=True)
 
-                    # 2. Dividend Yield
-                    st.markdown("<p class='label-black'>Dividend Yield</p>", unsafe_allow_html=True)
-                    st.markdown(f"<p class='value-black'>{format_val(info.get('dividendYield'), is_pct=True)}</p>", unsafe_allow_html=True)
+                    # 2. Forward (Future) P/E
+                    st.markdown("<p class='label-black'>Forward P/E</p>", unsafe_allow_html=True)
+                    f_color = "style='color:#064e3b;'" if m['f_pe'] < m['t_pe'] and m['f_pe'] > 0 else ""
+                    st.markdown(f"<p class='value-black' {f_color}>{format_num(m['f_pe'])}</p>", unsafe_allow_html=True)
 
-                    # 3. Fair Target (Gap to 1Y High)
+                    # 3. Quarterly Dividend Yield
+                    st.markdown("<p class='label-black'>Quarterly Div Yield</p>", unsafe_allow_html=True)
+                    div_display = f"{m['q_yield']:.2f}% (${m['q_div']:.2f})" if m['q_div'] > 0 else "0.00%"
+                    st.markdown(f"<p class='value-black'>{div_display}</p>", unsafe_allow_html=True)
+
+                    # 4. Target Gap
                     st.markdown("<p class='label-black'>Target (1Y High)</p>", unsafe_allow_html=True)
                     h52 = float(prices[t].tail(252).max())
                     gap = ((h52 / curr_p) - 1) * 100
                     st.markdown(f"<p class='value-black'>${h52:,.2f} ({gap:+.1f}%)</p>", unsafe_allow_html=True)
-
-                    # 4. Insider Flow (Volume Est)
-                    st.markdown("<p class='label-black'>3M Insider Flow (Est)</p>", unsafe_allow_html=True)
-                    vol_3m = volumes[t].tail(60).mean() * curr_p
-                    st.markdown(f"<p class='value-black'>B: {format_val(vol_3m*0.04)} | S: {format_val(vol_3m*0.01)}</p>", unsafe_allow_html=True)
     else:
         st.info("Input ticker in the sidebar.")
