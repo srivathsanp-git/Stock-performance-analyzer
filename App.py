@@ -26,8 +26,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- RESILIENT DATA FETCHING ---
-
+# --- UTILS ---
 @st.cache_data(ttl=3600)
 def get_ticker_symbol(name):
     try:
@@ -38,41 +37,27 @@ def get_ticker_symbol(name):
 
 @st.cache_data(ttl=3600)
 def fetch_valuation_metrics(t_str, curr_price):
-    """Bypasses basic blocks to calculate Trailing and Forward P/E."""
     try:
         t = yf.Ticker(t_str)
         info = t.info
-        
-        # 1. Trailing P/E Logic
         t_pe = info.get('trailingPE')
         if not t_pe:
             eps = info.get('trailingEps')
             t_pe = curr_price / eps if eps and eps > 0 else 0
-            
-        # 2. Forward P/E Logic
         f_pe = info.get('forwardPE')
         if not f_pe:
             f_eps = info.get('forwardEps')
             f_pe = curr_price / f_eps if f_eps and f_eps > 0 else 0
-
-        # 3. Dividend Logic
         divs = t.dividends
         last_div = divs.iloc[-1] if not divs.empty else 0
         q_yield = (last_div / curr_price) * 100 if last_div > 0 else 0
-
-        return {
-            "t_pe": t_pe,
-            "f_pe": f_pe,
-            "q_div": last_div,
-            "q_yield": q_yield,
-            "mcap": t.fast_info.get('market_cap', 0)
-        }
+        return {"t_pe": t_pe, "f_pe": f_pe, "q_div": last_div, "q_yield": q_yield}
     except:
-        return {"t_pe": 0, "f_pe": 0, "q_div": 0, "q_yield": 0, "mcap": 0}
+        return {"t_pe": 0, "f_pe": 0, "q_div": 0, "q_yield": 0}
 
 @st.cache_data(ttl=600)
 def fetch_history(tickers):
-    return yf.download(list(set(tickers)), period="2y", progress=False)
+    return yf.download(list(set(tickers)), period="2y", progress=False)['Close']
 
 def format_num(val):
     if not val or val == 0 or np.isnan(val): return "—"
@@ -96,17 +81,38 @@ with col_right:
     period_label = h2.select_slider("Range", options=["1mo", "3mo", "6mo", "1y", "2y"], value="1y")
 
     if valid_tickers:
-        hist = fetch_history(valid_tickers + ["^GSPC"])
-        prices = hist['Close']
-        
-        # Performance Chart
+        prices = fetch_history(valid_tickers + ["^GSPC"])
         days = {"1mo":30, "3mo":90, "6mo":180, "1y":365, "2y":730}[period_label]
         chart_data = (prices.tail(days) / prices.tail(days).iloc[0]) * 100
+
+        # --- UPDATED CHART WITH BOTTOM RIGHT LEGEND ---
         fig = go.Figure()
         for c in chart_data.columns:
-            fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data[c], name=c,
-                                     line=dict(width=1.5 if c=="^GSPC" else 3, dash='dash' if c=="^GSPC" else 'solid')))
-        fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor='rgba(0,0,0,0)')
+            is_sp = c == "^GSPC"
+            fig.add_trace(go.Scatter(
+                x=chart_data.index, y=chart_data[c], 
+                name="S&P 500" if is_sp else c,
+                line=dict(width=1.5 if is_sp else 3, dash='dash' if is_sp else 'solid', 
+                          color="#4b5563" if is_sp else None)
+            ))
+        
+        fig.update_layout(
+            template="plotly_dark", 
+            height=400, 
+            margin=dict(l=0,r=0,t=10,b=0), 
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(showgrid=False),
+            # LEGEND POSITIONING
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=0.01,
+                xanchor="right",
+                x=0.99,
+                bgcolor="rgba(0,0,0,0.5)"
+            )
+        )
         st.plotly_chart(fig, use_container_width=True)
 
         # Asset Analysis
@@ -117,29 +123,22 @@ with col_right:
             with cols[i]:
                 raw_p = prices[t].iloc[-1]
                 curr_p = float(raw_p.iloc[0]) if hasattr(raw_p, "__len__") else float(raw_p)
-                
-                # Metrics Fetch
                 m = fetch_valuation_metrics(t, curr_p)
                 
                 st.markdown(f"<p class='ticker-header'>{t}</p>", unsafe_allow_html=True)
                 st.markdown(f"<p class='price-sub'>${curr_p:.2f}</p>", unsafe_allow_html=True)
                 
                 with st.container(border=True):
-                    # 1. Trailing P/E
                     st.markdown("<p class='label-black'>Trailing P/E</p>", unsafe_allow_html=True)
                     st.markdown(f"<p class='value-black'>{format_num(m['t_pe'])}</p>", unsafe_allow_html=True)
-
-                    # 2. Forward (Future) P/E
+                    
                     st.markdown("<p class='label-black'>Forward P/E</p>", unsafe_allow_html=True)
-                    f_color = "style='color:#064e3b;'" if m['f_pe'] < m['t_pe'] and m['f_pe'] > 0 else ""
-                    st.markdown(f"<p class='value-black' {f_color}>{format_num(m['f_pe'])}</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p class='value-black'>{format_num(m['f_pe'])}</p>", unsafe_allow_html=True)
 
-                    # 3. Quarterly Dividend Yield
                     st.markdown("<p class='label-black'>Quarterly Div Yield</p>", unsafe_allow_html=True)
                     div_display = f"{m['q_yield']:.2f}% (${m['q_div']:.2f})" if m['q_div'] > 0 else "0.00%"
                     st.markdown(f"<p class='value-black'>{div_display}</p>", unsafe_allow_html=True)
 
-                    # 4. Target Gap
                     st.markdown("<p class='label-black'>Target (1Y High)</p>", unsafe_allow_html=True)
                     h52 = float(prices[t].tail(252).max())
                     gap = ((h52 / curr_p) - 1) * 100
