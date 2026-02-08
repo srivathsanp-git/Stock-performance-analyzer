@@ -3,7 +3,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Terminal Pro", layout="wide", initial_sidebar_state="collapsed")
@@ -51,11 +51,12 @@ with col_left:
         st.subheader("📊 Fundamental Data")
         for t in valid_tickers:
             try:
-                info = yf.Ticker(t).info
+                # Use a cached/minimal fetch for speed
+                t_obj = yf.Ticker(t)
+                info = t_obj.info
                 pe = info.get('forwardPE', 'N/A')
                 de = info.get('debtToEquity', 'N/A')
                 
-                # Render Side Card with Ratios and Insider Mock
                 st.markdown(f"""
                 <div class="side-card">
                     <div style="font-weight:bold; color:#00ff88; border-bottom:1px solid #333; padding-bottom:4px;">{t}</div>
@@ -77,20 +78,30 @@ with col_right:
     with head_left:
         st.title("Performance Intelligence")
     with head_right:
-        period = st.select_slider("Timeline", options=["1mo", "3mo", "6mo", "1y", "2y", "5y"], value="1y")
+        period_map = {
+            "1mo": 30, "3mo": 90, "6mo": 180, 
+            "1y": 365, "2y": 730, "5y": 1825
+        }
+        period_label = st.select_slider("Timeline", options=list(period_map.keys()), value="1y")
+        days_back = period_map[period_label]
 
     if valid_tickers:
-        # Fetch Data - fetching extra to calculate MAs properly
-        raw_data = yf.download(valid_tickers + ["^GSPC"], period="max")['Close']
-        if isinstance(raw_data, pd.Series): raw_data = raw_data.to_frame(name=valid_tickers[0])
+        # Fetch Data - we fetch 'max' to ensure we have enough history for the 200MA
+        raw_data = yf.download(valid_tickers + ["^GSPC"], period="max", progress=False)['Close']
         
-        chart_data = raw_data.last(period).ffill()
+        if isinstance(raw_data, pd.Series):
+            raw_data = raw_data.to_frame(name=valid_tickers[0])
+        
+        # FIX: Manual date filtering to avoid the ValueError
+        end_date = raw_data.index[-1]
+        start_date = end_date - timedelta(days=days_back)
+        chart_data = raw_data.loc[start_date:].ffill()
+        
+        # Normalization
         norm_data = (chart_data / chart_data.iloc[0]) * 100
 
         # --- CHARTING ---
         fig = go.Figure()
-        
-        # Benchmarks & Assets
         for col in norm_data.columns:
             if col == "^GSPC":
                 fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[col], name="S&P 500", line=dict(dash='dash', color='#555')))
@@ -100,11 +111,17 @@ with col_right:
         # Moving Averages (Primary Asset Only)
         primary = valid_tickers[0]
         if primary in raw_data.columns:
-            ma50 = raw_data[primary].rolling(50).mean().last(period)
-            ma200 = raw_data[primary].rolling(200).mean().last(period)
-            # Normalize MAs to match the scaled chart
-            fig.add_trace(go.Scatter(x=ma50.index, y=(ma50/chart_data[primary].iloc[0])*100, name="MA50", line=dict(width=1, color='cyan')))
-            fig.add_trace(go.Scatter(x=ma200.index, y=(ma200/chart_data[primary].iloc[0])*100, name="MA200", line=dict(width=1, color='orange')))
+            # We calculate MA on the full raw_data, then slice it to match the chart
+            ma50_full = raw_data[primary].rolling(50).mean()
+            ma200_full = raw_data[primary].rolling(200).mean()
+            
+            ma50 = ma50_full.loc[start_date:]
+            ma200 = ma200_full.loc[start_date:]
+            
+            # Normalize MAs relative to the chart's starting price
+            base_price = chart_data[primary].iloc[0]
+            fig.add_trace(go.Scatter(x=ma50.index, y=(ma50/base_price)*100, name="MA50", line=dict(width=1.5, color='cyan')))
+            fig.add_trace(go.Scatter(x=ma200.index, y=(ma200/base_price)*100, name="MA200", line=dict(width=1.5, color='orange')))
 
         fig.update_layout(template="plotly_dark", height=450, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
         st.plotly_chart(fig, use_container_width=True)
@@ -113,7 +130,8 @@ with col_right:
         st.subheader("Asset Momentum")
         m_cols = st.columns(len(valid_tickers))
         for i, t in enumerate(valid_tickers):
-            ret = ((chart_data[t].iloc[-1] / chart_data[t].iloc[0]) - 1) * 100
-            m_cols[i].metric(t, f"${chart_data[t].iloc[-1]:.2f}", f"{ret:.1f}%")
+            if t in chart_data.columns:
+                ret = ((chart_data[t].iloc[-1] / chart_data[t].iloc[0]) - 1) * 100
+                m_cols[i].metric(t, f"${chart_data[t].iloc[-1]:.2f}", f"{ret:.1f}%")
     else:
         st.info("👈 Add assets in the sidebar to visualize performance.")
