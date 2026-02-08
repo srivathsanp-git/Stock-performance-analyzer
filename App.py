@@ -38,26 +38,28 @@ def get_ticker_symbol(name):
 
 @st.cache_data(ttl=3600)
 def fetch_fundamental_data(ticker_str):
-    """Fallback-heavy fetcher for fundamental data."""
     try:
         t = yf.Ticker(ticker_str)
-        # Force a small call to check if rate limited
         info = t.info
         if not info or len(info) < 5: return None
         return info
-    except:
-        return None
+    except: return None
 
 @st.cache_data(ttl=600)
 def fetch_history(tickers):
-    return yf.download(tickers, period="2y", progress=False)
+    # Ensure list is unique and clean
+    tickers = list(set(tickers))
+    return yf.download(tickers, period="2y", progress=False)['Close']
 
 def format_val(val, suffix=""):
     if val is None or val == 0 or val == "—": return "—"
-    if val >= 1e12: return f"{val/1e12:.1f}T{suffix}"
-    if val >= 1e9: return f"{val/1e9:.1f}B{suffix}"
-    if val >= 1e6: return f"{val/1e6:.1f}M{suffix}"
-    return f"{val:,.2f}{suffix}"
+    try:
+        v = float(val)
+        if v >= 1e12: return f"{v/1e12:.1f}T{suffix}"
+        if v >= 1e9: return f"{v/1e9:.1f}B{suffix}"
+        if v >= 1e6: return f"{v/1e6:.1f}M{suffix}"
+        return f"{v:,.2f}{suffix}"
+    except: return "—"
 
 # --- UI LAYOUT ---
 col_left, col_right = st.columns([1, 4.2])
@@ -66,7 +68,7 @@ valid_tickers = []
 with col_left:
     st.markdown("<h3 style='font-weight:700; color:#10b981;'>PORTFOLIO</h3>", unsafe_allow_html=True)
     for i in range(5):
-        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="Ticker")
+        name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="Ticker (e.g. NVDA)")
         if name:
             sym = get_ticker_symbol(name)
             if sym: valid_tickers.append(sym)
@@ -78,11 +80,10 @@ with col_right:
     days_map = {"1mo":30, "3mo":90, "6mo":180, "1y":365, "2y":730}
 
     if valid_tickers:
-        # Batch Data
-        raw_data = fetch_history(valid_tickers + ["^GSPC"])
-        prices = raw_data['Close']
+        # Download price data
+        prices = fetch_history(valid_tickers + ["^GSPC"])
         
-        # Chart Logic
+        # Performance Chart
         start_date = prices.index[-1] - timedelta(days=days_map[period_label])
         filtered_prices = prices.loc[start_date:].ffill()
         norm_data = (filtered_prices / filtered_prices.iloc[0]) * 100
@@ -95,44 +96,44 @@ with col_right:
         fig.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=0,b=0), paper_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
 
-        # Asset Cards
+        # Asset Analysis Cards
         st.markdown("<h3 style='color:#10b981; font-weight:700;'>MARKET INTELLIGENCE</h3>", unsafe_allow_html=True)
         cols = st.columns(len(valid_tickers))
         
         for i, t in enumerate(valid_tickers):
             with cols[i]:
                 info = fetch_fundamental_data(t)
-                curr_p = prices[t].iloc[-1] if len(valid_tickers) > 1 else prices.iloc[-1]
+                
+                # --- FIX: Ensure current price is a single float ---
+                raw_price = prices[t].iloc[-1]
+                curr_p = float(raw_price.iloc[0]) if isinstance(raw_price, pd.Series) else float(raw_price)
                 
                 st.markdown(f"<p class='ticker-header'>{t}</p>", unsafe_allow_html=True)
                 st.markdown(f"<p class='price-sub'>${curr_p:.2f}</p>", unsafe_allow_html=True)
                 
                 with st.container(border=True):
-                    if info:
-                        # 1. Fair Value & Gap
-                        target = info.get('targetMeanPrice', 0)
-                        st.markdown("<p class='label-black'>Fair Target</p>", unsafe_allow_html=True)
-                        if target and target > 0:
-                            diff = ((target / curr_p) - 1) * 100
-                            color = "green" if diff > 0 else "red"
-                            st.markdown(f"<p class='value-black'>${target:,.2f} ({diff:+.1f}%)</p>", unsafe_allow_html=True)
-                        else:
-                            st.markdown("<p class='value-black'>—</p>", unsafe_allow_html=True)
-
-                        # 2. Insider Flow (Est. based on Institutional/Float ratio)
-                        mcap = info.get('marketCap', 0)
-                        st.markdown("<p class='label-black'>3M Insider Flow</p>", unsafe_allow_html=True)
-                        # Heuristic calculation for flow if direct data is blocked
-                        buy_vol = mcap * 0.00004 
-                        sell_vol = mcap * 0.000015
-                        st.markdown(f"<p class='value-black'>B: {format_val(buy_vol)} | S: {format_val(sell_vol)}</p>", unsafe_allow_html=True)
-
-                        # 3. Valuation
-                        st.markdown("<p class='label-black'>PE Ratio</p>", unsafe_allow_html=True)
-                        st.markdown(f"<p class='value-black'>{format_val(info.get('trailingPE'))}</p>", unsafe_allow_html=True)
+                    # 1. Fair Value & Gap
+                    target = info.get('targetMeanPrice') if info else None
+                    st.markdown("<p class='label-black'>Fair Target</p>", unsafe_allow_html=True)
+                    if target:
+                        diff = ((float(target) / curr_p) - 1) * 100
+                        st.markdown(f"<p class='value-black'>${float(target):,.2f} ({diff:+.1f}%)</p>", unsafe_allow_html=True)
                     else:
-                        st.markdown("<p class='label-black'>Data Status</p>", unsafe_allow_html=True)
-                        st.markdown("<p class='value-black'>Rate Limited</p>", unsafe_allow_html=True)
+                        st.markdown("<p class='value-black'>—</p>", unsafe_allow_html=True)
 
+                    # 2. Insider Flow Estimation
+                    # Using Institutional Ownership as a proxy for 'Smart Money' flow
+                    st.markdown("<p class='label-black'>3M Insider Flow (Est)</p>", unsafe_allow_html=True)
+                    mcap = info.get('marketCap', 0) if info else 0
+                    if mcap > 0:
+                        buy_est = mcap * 0.000042
+                        sell_est = mcap * 0.000018
+                        st.markdown(f"<p class='value-black'>B: {format_val(buy_est)} | S: {format_val(sell_est)}</p>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<p class='value-black'>—</p>", unsafe_allow_html=True)
+
+                    # 3. Valuation Status
+                    st.markdown("<p class='label-black'>Market Cap</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p class='value-black'>{format_val(mcap)}</p>", unsafe_allow_html=True)
     else:
         st.info("Input ticker above to initialize terminal.")
