@@ -69,23 +69,27 @@ def format_vol(val):
     return f"{val/1e3:.1f}K" if val >= 1e3 else f"{int(val)}"
 
 # --- UI LAYOUT ---
-col_left, col_right = st.columns([1, 4.2])
+st.title("Stock Performance Analyzer")
+st.subheader("Intelligence Terminal")
 
-valid_tickers = []
-with col_left:
-    st.markdown("<h3 style='font-weight:700; color:#10b981;'>PORTFOLIO</h3>", unsafe_allow_html=True)
+# Sidebar controls to ensure consistent desktop and mobile behavior
+with st.sidebar:
+    st.header("Portfolio")
+    valid_tickers = []
     for i in range(5):
         name = st.text_input(f"Asset {i+1}", key=f"a{i}", placeholder="Ticker")
         if name:
             sym = get_ticker_symbol(name)
-            if sym: valid_tickers.append(sym)
+            if sym:
+                valid_tickers.append(sym)
+            else:
+                st.warning(f"Ticker '{name}' not found. Please enter a valid symbol.")
 
-with col_right:
-    h1, h2 = st.columns([3, 1])
-    h1.markdown("<h1 style='font-weight:700;'>Intelligence Terminal</h1>", unsafe_allow_html=True)
-    
+    st.markdown("---")
     range_options = ["3 Months", "6 Months", "1 Year", "5 Years", "Life Time"]
-    period_label = h2.select_slider("Range", options=range_options, value="1 Year")
+    period_label = st.select_slider("Range", options=range_options, value="1 Year")
+
+# Main panel
 
     if valid_tickers:
         all_prices = fetch_history(valid_tickers + ["^GSPC"])
