@@ -91,57 +91,57 @@ with st.sidebar:
 
 # Main panel
 
-    if valid_tickers:
-        all_prices = fetch_history(valid_tickers + ["^GSPC"])
-        
-        # Determine Window
-        window_map = {"3 Months": 90, "6 Months": 180, "1 Year": 365, "5 Years": 1825}
-        days = window_map.get(period_label, len(all_prices))
+if valid_tickers:
+    all_prices = fetch_history(valid_tickers + ["^GSPC"])
+    
+    # Determine Window
+    window_map = {"3 Months": 90, "6 Months": 180, "1 Year": 365, "5 Years": 1825}
+    days = window_map.get(period_label, len(all_prices))
 
-        chart_prices = all_prices.tail(days).ffill()
-        norm_data = (chart_prices / chart_prices.iloc[0]) * 100
+    chart_prices = all_prices.tail(days).ffill()
+    norm_data = (chart_prices / chart_prices.iloc[0]) * 100
 
-        # Performance Chart
-        fig = go.Figure()
-        for c in norm_data.columns:
-            is_sp = (c == "^GSPC")
-            fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[c], name="S&P 500" if is_sp else c,
-                                     line=dict(width=1.5 if is_sp else 3, dash='dash' if is_sp else 'solid')))
-        fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=10,b=0),
-                          legend=dict(orientation="h", yanchor="bottom", y=0.01, xanchor="right", x=0.99))
-        st.plotly_chart(fig, use_container_width=True)
+    # Performance Chart
+    fig = go.Figure()
+    for c in norm_data.columns:
+        is_sp = (c == "^GSPC")
+        fig.add_trace(go.Scatter(x=norm_data.index, y=norm_data[c], name="S&P 500" if is_sp else c,
+                                 line=dict(width=1.5 if is_sp else 3, dash='dash' if is_sp else 'solid')))
+    fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=10,b=0),
+                      legend=dict(orientation="h", yanchor="bottom", y=0.01, xanchor="right", x=0.99))
+    st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("<h3 style='color:#10b981; font-weight:700;'>MARKET INTELLIGENCE</h3>", unsafe_allow_html=True)
-        cols = st.columns(len(valid_tickers))
-        
-        for i, t in enumerate(valid_tickers):
-            with cols[i]:
-                # Performance Math
-                asset_curr = chart_prices[t].iloc[-1]
-                asset_growth = ((asset_curr / chart_prices[t].iloc[0]) - 1) * 100
-                sp_growth = ((chart_prices["^GSPC"].iloc[-1] / chart_prices["^GSPC"].iloc[0]) - 1) * 100
-                
-                status_emoji = "🚀" if asset_growth > sp_growth else "📉"
-                m = fetch_metrics(t, asset_curr)
-                
-                st.markdown(f"<p class='ticker-header'>{t}</p>", unsafe_allow_html=True)
-                st.markdown(f"<p class='price-sub'>${asset_curr:.2f}</p>", unsafe_allow_html=True)
-                
-                with st.container(border=True):
-                    # 1. GROWTH & STATUS
-                    st.markdown(f"<p class='label-black'>Growth vs S&P ({period_label})</p>", unsafe_allow_html=True)
-                    st.markdown(f"<p class='value-black'>{status_emoji} {asset_growth:+.1f}% <span style='font-size:0.8rem; opacity:0.7;'>(S&P: {sp_growth:+.1f}%)</span></p>", unsafe_allow_html=True)
+    st.markdown("<h3 style='color:#10b981; font-weight:700;'>MARKET INTELLIGENCE</h3>", unsafe_allow_html=True)
+    cols = st.columns(len(valid_tickers))
+    
+    for i, t in enumerate(valid_tickers):
+        with cols[i]:
+            # Performance Math
+            asset_curr = chart_prices[t].iloc[-1]
+            asset_growth = ((asset_curr / chart_prices[t].iloc[0]) - 1) * 100
+            sp_growth = ((chart_prices["^GSPC"].iloc[-1] / chart_prices["^GSPC"].iloc[0]) - 1) * 100
+            
+            status_emoji = "🚀" if asset_growth > sp_growth else "📉"
+            m = fetch_metrics(t, asset_curr)
+            
+            st.markdown(f"<p class='ticker-header'>{t}</p>", unsafe_allow_html=True)
+            st.markdown(f"<p class='price-sub'>${asset_curr:.2f}</p>", unsafe_allow_html=True)
+            
+            with st.container(border=True):
+                # 1. GROWTH & STATUS
+                st.markdown(f"<p class='label-black'>Growth vs S&P ({period_label})</p>", unsafe_allow_html=True)
+                st.markdown(f"<p class='value-black'>{status_emoji} {asset_growth:+.1f}% <span style='font-size:0.8rem; opacity:0.7;'>(S&P: {sp_growth:+.1f}%)</span></p>", unsafe_allow_html=True)
 
-                    # 2. VALUATION
-                    st.markdown("<p class='label-black'>P/E (Trail | Fwd)</p>", unsafe_allow_html=True)
-                    st.markdown(f"<p class='value-black'>{m['t_pe']:.1f} | {m['f_pe']:.1f}</p>", unsafe_allow_html=True)
+                # 2. VALUATION
+                st.markdown("<p class='label-black'>P/E (Trail | Fwd)</p>", unsafe_allow_html=True)
+                st.markdown(f"<p class='value-black'>{m['t_pe']:.1f} | {m['f_pe']:.1f}</p>", unsafe_allow_html=True)
 
-                    # 3. INSIDER
-                    st.markdown("<p class='label-black'>Insider (Buy | Sell)</p>", unsafe_allow_html=True)
-                    st.markdown(f"<p class='value-black'>{format_vol(m['i_buy'])} | {format_vol(m['i_sell'])}</p>", unsafe_allow_html=True)
+                # 3. INSIDER
+                st.markdown("<p class='label-black'>Insider (Buy | Sell)</p>", unsafe_allow_html=True)
+                st.markdown(f"<p class='value-black'>{format_vol(m['i_buy'])} | {format_vol(m['i_sell'])}</p>", unsafe_allow_html=True)
 
-                    # 4. DIVIDEND
-                    st.markdown("<p class='label-black'>Quarterly Div Yield</p>", unsafe_allow_html=True)
-                    st.markdown(f"<p class='value-black'>{m['q_yield']:.2f}% (${m['q_div']:.2f})</p>", unsafe_allow_html=True)
-    else:
-        st.info("Input ticker in the sidebar to initialize terminal.")
+                # 4. DIVIDEND
+                st.markdown("<p class='label-black'>Quarterly Div Yield</p>", unsafe_allow_html=True)
+                st.markdown(f"<p class='value-black'>{m['q_yield']:.2f}% (${m['q_div']:.2f})</p>", unsafe_allow_html=True)
+else:
+    st.info("Input ticker in the sidebar to initialize terminal.")
